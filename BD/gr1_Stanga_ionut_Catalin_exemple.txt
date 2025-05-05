@@ -1,0 +1,145 @@
+@D:\Facultate\1_2\BD\gr1_Stanga_Ionut_Catalin_creare_inserare.sql;
+
+drop table sefdepou;
+drop table vatman;
+drop table alimenteaza;
+drop table deserveste;
+drop table statie;
+drop table linie;
+drop table tramvai;
+drop table depou;
+
+select * from alimenteaza;
+select* from tramvai;
+select* from linie;
+select* from depou;
+select* from SefDepou;
+
+
+//Avand in vedere dorinta de a oferi recompensa echitabila, bazata pe munca depusa, se doreste aflarea numelui si salariilor vatmanilor ce circula pe cel mai dificil traseu (linia 1) care castiga sub medie 
+//cerinta a)
+select v.nume, v.salariu
+from vatman v join tramvai t on v.numar_vagon = t.numar_vagon
+                  join alimenteaza a on t.numar_vagon = a.numar_vagon
+where a.numar_linie = 1 and v.salariu < (
+                  select avg(v.salariu)
+                  from vatman v join tramvai t1 on v.numar_vagon = t1.numar_vagon
+                  join alimenteaza a1 on t1.numar_vagon = a1.numar_vagon
+                  where a1.numar_linie = 1);
+                  
+//Este necesara revizia periodica a unor tramvaie (cu ultima revizie cu mai mult de un an jumatate in urma). Este necesar sa se cunoasca in ce depou urmeaza sa se faca revizia, cel mai usor fiind la depoul cu cele mai multe de astfel de tramvaie.
+
+select d.nume as depou, count(t.numar_vagon) as numar_tramvaie
+from Depou d
+join (
+    select numar_vagon, id_depou
+    from Tramvai
+    where data_revizie < ADD_MONTHS(SYSDATE, -18)
+) t on d.id_depou = t.id_depou
+group by d.nume;
+
+//Sa se afle, pentru fiecare vatman, numele si salariul acestuia, cat si daca se afla sub, deasupra sau fix la media salariilor.
+with MedieSalariu as (
+    select avg(salariu) as media_salariilor
+    from vatman
+)
+select nume, salariu, NVL(to_char(numar_vagon), 'Vagon in mentenanta/neasignat') as Vagon, 
+decode(sign(v.salariu-m.media_salariilor), 1, 'Salariu peste medie',
+                                           -1, 'Salariu sub medie',
+                                           0, 'Salariu mediu',
+                                           'Salariu necunoscut') as comparatie_salariu
+from vatman v
+cross join MedieSalariu m
+order by salariu;
+
+
+//Deoarece flota de tramvaie bidirectionale este limitata in Bucuresti, trebuie cunoscuta situatia acestora in amanunt. Sa se afiseze numele si capacitatea de transport (suma locurilor tramvaielor bidirectionale) a depourilor care gareaza tramvaie care circula pe linii ce necesita tramvaie bidirectionale.
+
+select upper(d.nume) as nume_depou, sum(t.numar_scaune) as capacitate
+from depou d
+join tramvai t on d.id_depou = t.id_depou
+group by d.nume
+having count(
+    case
+        when t.numar_vagon in (
+            select t2.numar_vagon
+            from tramvai t2
+            join alimenteaza a on t2.numar_vagon = a.numar_vagon
+            join linie l on a.numar_linie = l.numar_linie
+            where l.necesita_bidirectionale = 'DA'
+        )
+        then 1
+        else null
+    end
+) > 0;
+
+
+
+
+//Sa se afiseze toate statiile acoperite de tramvaiele ce gareaza in depoul Militari
+select distinct(s.nume_statie), s.sector
+from statie s join deserveste d on s.nume_statie = d.nume_statie
+              join linie l on l.numar_linie = d.numar_linie
+              join alimenteaza a on a.numar_linie = l.numar_linie
+              join tramvai t on t.numar_vagon = a.numar_vagon
+              join depou d1 on d1.id_depou = t.id_depou
+where d1.nume = 'Militari'
+order by s.sector, s.nume_statie;
+
+
+//Sa se mute tramvaiele din Colentina si Bucurestii Noi in Militari
+update tramvai t
+set id_depou = 1
+where t.id_depou in (select id_depou
+                     from depou
+                     where nume = 'Colentina' or nume = 'Bucurestii Noi');
+
+//Sa se extinda capacitatea depourilor ce alimenteaza statii din sectorul 6 (masura luata in urma cresterii populatiei)
+update depou d
+set capacitate = capacitate + 10 
+where exists (
+    select *
+    from statie s 
+    join deserveste ds on ds.nume_statie = s.nume_statie
+    join alimenteaza a on ds.numar_linie = a.numar_linie
+    join tramvai t on t.numar_vagon = a.numar_vagon
+    where d.id_depou = t.id_depou and s.sector = 6);
+
+//Linia 32 este in lucru si are nevoie de tramvaie bidirectionale. Sa se mute toate tramvaiele bidirectionale pe linia 32
+select t.numar_vagon, t.model_vagon, l.numar_linie
+from tramvai t
+join alimenteaza a on t.numar_vagon = a.numar_vagon
+join linie l on a.numar_linie = l.numar_linie;
+
+update alimenteaza a
+set numar_linie = 32
+where numar_vagon in (
+    select t.numar_vagon
+    from tramvai t
+    where t.model_vagon = 'V3A-93-2S'
+);
+
+
+//Avand in vedere vechimea acestora, sa se scoata din circulatie toate tramvaiele cu modelul Tatra T4R
+delete from Alimenteaza
+where numar_vagon in (
+    select numar_vagon
+    from Tramvai
+    where model_vagon = 'Tatra T4R'
+);
+
+//Deoarece linia 44 nu mai este necesara, sa se dea afara toti vatmanii ce operau tramvaie pe aceasta linie
+delete from vatman
+where numar_vagon in (
+    select t.numar_vagon
+    from tramvai t join alimenteaza a on t.numar_vagon = a.numar_vagon
+                   join linie l on a.numar_linie = l.numar_linie
+    where l.numar_linie = 44);
+
+//Vagonul nr. 77 a avut un incendiu major din cauza unei defectiuni care trebuia prevenita de seful de depou. Sa fie dat afara seful depoului ce gareaza acest vagon.
+DELETE FROM SefDepou
+WHERE id_depou IN (
+    SELECT id_depou
+    FROM Tramvai
+    WHERE numar_vagon = 77
+);
